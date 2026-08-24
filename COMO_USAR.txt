@@ -1,0 +1,97 @@
+﻿CONSOLIDAÇÕES — FATURAMENTO DE TRANSPORTES
+
+A pasta INPUT escolhida determina automaticamente o tratamento aplicado.
+
+1) CONSOLIDAÇÃO DE EMBARQUES
+   Pasta: 01_CONSOLIDAÇÃO_DE_EMBARQUES\INPUT
+   Resultado: um único arquivo por APÓLICE + COMPETÊNCIA, com uma aba para
+   cada relação colocada no INPUT no mesmo acionamento do botão. Cada aba
+   mantém o padrão Multi/Multilaser, com uma linha por DI, embarque ou item
+   de DUIMP.
+
+2) CONSOLIDAÇÃO DE DUIMP
+   Pasta: 02_CONSOLIDAÇÃO_DE_DUIMP\INPUT
+   Resultado: mantém o formato da relação, preserva as DIs e reúne as adições
+   e os itens em uma ocorrência por número-base de DUIMP.
+
+IDENTIDADE VISUAL C·TRÊS
+
+- Novos resultados recebem automaticamente o cabeçalho, as cores e a
+  tipografia institucional C·TRÊS.
+- O logo utilizado fica em AUTOMACAO\ASSETS\CTRES_perfilNOME.png.
+- Se o logo estiver indisponível, o processamento continua e o resumo exibe
+  um aviso; títulos, cores e tipografia continuam sendo aplicados.
+- Na DUIMP, a aba consolidada permanece visível. Abas auxiliares da relação
+  original são preservadas no arquivo, mas ficam ocultas para evitar confusão.
+- Arquivos já existentes no OUTPUT não são alterados.
+
+COMO PROCESSAR
+
+1. Feche no Excel a relação que será processada.
+2. Coloque um arquivo .xlsx no INPUT correspondente.
+3. Aguarde a sincronização do OneDrive terminar.
+4. Dê duplo clique em PROCESSAR_CONSOLIDACOES.cmd.
+5. Confira a prévia da fila e aguarde o resumo final.
+6. Confira o resultado no OUTPUT correspondente.
+7. O arquivo original concluído será movido automaticamente para PROCESSADOS.
+
+O botão processa todos os arquivos encontrados nos dois INPUTs.
+No processo de Embarques, os arquivos do mesmo acionamento são agrupados por
+apólice e competência. Grupos diferentes geram resultados separados.
+No processo de DUIMP, cada arquivo continua sendo uma solicitação individual.
+
+Na primeira execução desta versão, arquivos antigos que já possuem resultado
+válido serão apenas movidos para PROCESSADOS. Nenhum resultado duplicado será
+criado durante essa organização inicial.
+
+COMO PROCESSAR NOVAMENTE
+
+Para Embarques, coloque novamente no INPUT todas as relações que precisam
+aparecer juntas na nova versão do lote. Para DUIMP, coloque novamente a cópia
+do arquivo individual. Execute PROCESSAR_CONSOLIDACOES.cmd. O resultado e os
+originais arquivados receberão _V2, _V3 e assim por diante, sem sobrescrever
+as versões anteriores.
+
+SE UM ARQUIVO FOR REJEITADO
+
+- Consulte o relatório criado em AUTOMACAO\ERROS.
+- Confirme que o arquivo é .xlsx e está no INPUT correto.
+- Feche o arquivo no Excel e aguarde a sincronização.
+- Não altere a estrutura original da relação da seguradora.
+- O arquivo rejeitado permanecerá no INPUT.
+- Em Embarques, se uma relação falhar, nenhuma relação da mesma apólice e
+  competência será publicada ou movida; o relatório abrangerá o lote inteiro.
+- Se um arquivo bloqueado não permitir identificar apólice e competência,
+  todos os lotes de Embarques daquele acionamento serão suspensos.
+- Depois, execute novamente o botão.
+
+REGRAS DE SEGURANÇA
+
+- O conteúdo do arquivo original nunca é alterado.
+- Após o sucesso, o original é movido do INPUT para PROCESSADOS.
+- PROCESSADOS é o histórico operacional e não deve ser limpo rotineiramente.
+- O resultado é criado primeiro em uma pasta temporária.
+- Nada é publicado no OUTPUT quando a validação falha.
+- Resultados existentes nunca são sobrescritos.
+- Arquivos existentes em PROCESSADOS nunca são sobrescritos.
+- Os registros operacionais ficam em AUTOMACAO\LOGS.
+- A primeira versão deve ser utilizada por apenas um colaborador de cada vez.
+
+PADRÕES DE NOMES
+
+- Apólice cadastrada: NOME - PRÉVIA - COMPETÊNCIA MÊS - ANO.xlsx
+- Apólice não cadastrada: APOLICE_NUMERO_YYYY_MM_EMBARQUES_CONSOLIDADOS.xlsx
+- CLIENTE_YYYY_MM_DUIMP_CONSOLIDADA.xlsx
+
+NOMES AMIGÁVEIS DE LOTES
+
+- A configuração fica em AUTOMACAO\GRUPOS_EMBARQUES.csv.
+- Formato: Apolice;NomeLote
+- A apólice deve ter 13 dígitos e ser mantida como texto, inclusive com zeros
+  à esquerda.
+
+REQUISITOS
+
+- Windows com Excel Desktop e PowerShell.
+- Acesso sincronizado à biblioteca Ctrês Seguros - Transportes.
+- Arquivos de entrada no formato .xlsx.

@@ -1,0 +1,17 @@
+TIPO=DUIMP
+PADRAO=AGRUPAMENTO_POR_DUIMP_BASE
+
+Coloque no INPUT somente os arquivos da demanda atual.
+
+Tratamento aplicado:
+- manter o formato original da relação da seguradora;
+- remover os sufixos de adição e item da identificação;
+- manter uma ocorrência por número-base de DUIMP;
+- somar FOB, frete, despesas, lucro, impostos, importância segurada e prêmio;
+- manter peso, datas e câmbio apenas uma vez;
+- usar DIVERSAS MERCADORIAS, DIVERSAS e CONFORME ITENS quando necessário;
+- conferir quantidade de DUIMPs e conciliar os totais antes e depois;
+- salvar o resultado somente no OUTPUT desta pasta.
+
+Nome esperado:
+CLIENTE_COMPETENCIA_DUIMP_CONSOLIDADA.xlsx

@@ -1,0 +1,14 @@
+TIPO=EMBARQUES
+PADRAO=TABULAR_22_COLUNAS
+
+Coloque no INPUT somente os arquivos da demanda atual.
+
+Tratamento aplicado:
+- transformar a relação detalhada da seguradora em uma planilha tabular;
+- manter uma linha por DI ou embarque;
+- utilizar as colunas financeiras do padrão Multilaser;
+- conferir quantidade de documentos, duplicidades e totais financeiros;
+- salvar o resultado somente no OUTPUT desta pasta.
+
+Nome esperado:
+CLIENTE_COMPETENCIA_EMBARQUES_CONSOLIDADOS.xlsx

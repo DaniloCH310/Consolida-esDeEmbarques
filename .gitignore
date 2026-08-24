@@ -1,0 +1,31 @@
+# Dados operacionais e documentos de clientes
+**/INPUT/**
+**/OUTPUT/**
+**/PROCESSADOS/**
+AUTOMACAO/LOGS/**
+AUTOMACAO/ERROS/**
+AUTOMACAO/ESTADO/**
+AUTOMACAO/BACKUPS/**
+AUTOMACAO/TEMP/**
+AUTOMACAO/TEMPORARIO/**
+AUTOMACAO/TEMPORARIOS/**
+
+# Planilhas e documentos nunca devem ser versionados neste repositório
+*.xlsx
+*.xls
+*.xlsm
+*.xlsb
+*.csv~
+*.pdf
+~$*
+
+# Arquivos temporários do sistema e editores
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.tmp
+*.bak
+*.log
+
+# Permite manter somente marcadores de estrutura
+!**/.gitkeep
