@@ -8,6 +8,11 @@ A pasta INPUT escolhida determina automaticamente o tratamento aplicado.
    cada relação colocada no INPUT no mesmo acionamento do botão. Cada aba
    mantém o padrão Multi/Multilaser, com uma linha por DI, embarque ou item
    de DUIMP.
+   Também aceita arquivos gerados pelo processo 02_CONSOLIDAÇÃO_DE_DUIMP.
+   Nesse formato, cada ocorrência de DI permanece em uma linha e cada DUIMP
+   já consolidada permanece em uma única linha, sem reabrir adições e itens.
+   Relações originais e consolidados de DUIMP podem participar do mesmo lote
+   quando possuírem a mesma apólice e competência.
 
 2) CONSOLIDAÇÃO DE DUIMP
    Pasta: 02_CONSOLIDAÇÃO_DE_DUIMP\INPUT

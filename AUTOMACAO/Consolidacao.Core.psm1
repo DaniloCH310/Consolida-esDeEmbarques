@@ -127,7 +127,9 @@ function Get-DuimpParts {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)] [string] $Document)
 
-    $pattern = "^DUIMP/Adi(?:ção|cao)/Item:\s*(\d{2}/BR\d+-\d)/(\d{4})/(\d{5})$"
+    # Algumas extracoes MAPFRE substituem caracteres de 'Adicao' por '?'.
+    # Aceitar somente a variante observada, sem relaxar os identificadores.
+    $pattern = "^DUIMP/Adi(?:ção|cao|c\?o)/Item:\s*(\d{2}/BR\d+-\d)/(\d{4})/(\d{5})$"
     $match = [regex]::Match($Document.Trim(), $pattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase)
     if (-not $match.Success) {
         return $null
@@ -324,6 +326,55 @@ function Get-LabelValue {
     return ""
 }
 
+function Test-ConsolidatedDuimpWorksheet {
+    param([Parameter(Mandatory = $true)] [object[]] $Rows)
+
+    $wanted = "relacaoconsolidadadeduimp"
+    $limit = [Math]::Min($Rows.Count, 10)
+    for ($rowIndex = 0; $rowIndex -lt $limit; $rowIndex++) {
+        foreach ($value in @($Rows[$rowIndex])) {
+            if ((ConvertTo-NormalizedKey $value) -eq $wanted) {
+                return $true
+            }
+        }
+    }
+    return $false
+}
+
+function Get-WorksheetCellText {
+    param(
+        [Parameter(Mandatory = $true)] [object[]] $Rows,
+        [Parameter(Mandatory = $true)] [int] $Row,
+        [Parameter(Mandatory = $true)] [int] $Column
+    )
+
+    if ($Row -lt 0 -or $Row -ge $Rows.Count) {
+        return ""
+    }
+    $rowValues = @($Rows[$Row])
+    if ($Column -lt 0 -or $Column -ge $rowValues.Count) {
+        return ""
+    }
+    return ([string] $rowValues[$Column]).Trim()
+}
+
+function ConvertTo-ConsolidatedDuimpExchange {
+    param([AllowNull()] $Value)
+
+    $exchange = ConvertTo-DecimalValue $Value
+    if ($null -eq $exchange) {
+        return $null
+    }
+
+    # Ao salvar a aba consolidada, alguns valores com sete casas decimais
+    # podem chegar ao Excel sem o separador (ex.: 50415001 = 5,0415001).
+    if ($exchange -ge 10000000 -and $exchange -le 99999999 -and
+        $exchange -eq [decimal]::Truncate($exchange)) {
+        return $exchange / [decimal] 10000000
+    }
+    return $exchange
+}
+
 function Get-WorkbookMetadata {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)] [object[]] $Rows)
@@ -332,6 +383,27 @@ function Get-WorkbookMetadata {
     $subgroup = Get-LabelValue -Rows $Rows -Label "SubGrupo"
     $reference = (Get-LabelValue -Rows $Rows -Label "Referencia") -replace "\s", ""
     $client = Get-LabelValue -Rows $Rows -Label "Segurado"
+
+    if (Test-ConsolidatedDuimpWorksheet -Rows $Rows) {
+        if ([string]::IsNullOrWhiteSpace($subgroup)) {
+            foreach ($column in @(5, 4)) {
+                $candidate = Get-WorksheetCellText -Rows $Rows -Row 5 -Column $column
+                if ($candidate -match "^\d{1,3}$") {
+                    $subgroup = $candidate
+                    break
+                }
+            }
+        }
+        if ([string]::IsNullOrWhiteSpace($reference)) {
+            foreach ($column in @(7, 6)) {
+                $candidate = (Get-WorksheetCellText -Rows $Rows -Row 5 -Column $column) -replace "\s", ""
+                if ($candidate -match "^(?:0[1-9]|1[0-2])/20\d{2}$") {
+                    $reference = $candidate
+                    break
+                }
+            }
+        }
+    }
 
     if ($subgroup -match "^\d+$") {
         $subgroup = $subgroup.PadLeft(3, "0")
@@ -521,20 +593,102 @@ function Get-DuimpFinancialSlots {
 function Get-DuimpConditionSlot {
     param([Parameter(Mandatory = $true)] $Block)
 
+    $cacheProperty = $Block.PSObject.Properties["DuimpConditionSlot"]
+    if ($null -ne $cacheProperty) {
+        return $cacheProperty.Value
+    }
+
+    $slot = $null
     $positions = @(Get-BlockLabelPositions -Block $Block -Label "Cond./Franquia")
     if ($positions.Count -gt 0) {
         $position = $positions[0]
         if ($position.Column + 1 -lt $Block.Rows[$position.Row].Count) {
-            return [pscustomobject]@{ Row = $position.Row; Column = $position.Column + 1 }
+            $slot = [pscustomobject]@{ Row = $position.Row; Column = $position.Column + 1 }
         }
     }
 
     # Compatibilidade com o layout legado e com as matrizes de teste antigas,
     # nas quais o valor existe em I9, mas o rotulo nao e repetido na linha.
-    if ($Block.Rows.Count -gt 8 -and @($Block.Rows[8]).Count -gt 7) {
-        return [pscustomobject]@{ Row = 8; Column = 7 }
+    if ($null -eq $slot -and $Block.Rows.Count -gt 8 -and @($Block.Rows[8]).Count -gt 7) {
+        $slot = [pscustomobject]@{ Row = 8; Column = 7 }
     }
-    return $null
+    $Block | Add-Member -MemberType NoteProperty -Name "DuimpConditionSlot" -Value $slot
+    return $slot
+}
+
+function Get-DuimpFinancialSlotByKey {
+    param([Parameter(Mandatory = $true)] $Block)
+
+    $cacheProperty = $Block.PSObject.Properties["DuimpFinancialSlotByKey"]
+    if ($null -ne $cacheProperty) {
+        return $cacheProperty.Value
+    }
+
+    # Get-DuimpFinancialSlots constrói o mapa de todos os rótulos em uma única
+    # passagem. Indexar pelo identificador elimina pipelines repetidos durante
+    # a soma das adições/itens da mesma DUIMP.
+    [void] @(Get-DuimpFinancialSlots -Block $Block -Label "FOB")
+    $slotMap = $Block.PSObject.Properties["DuimpFinancialSlotMap"].Value
+    $byKey = @{}
+    foreach ($slots in $slotMap.Values) {
+        foreach ($slot in @($slots)) {
+            $byKey[$slot.Key] = $slot
+        }
+    }
+    $Block | Add-Member -MemberType NoteProperty -Name "DuimpFinancialSlotByKey" -Value $byKey
+    return $byKey
+}
+
+function Get-CachedDuimpLabelPositions {
+    param(
+        [Parameter(Mandatory = $true)] $Block,
+        [Parameter(Mandatory = $true)] [string] $Label
+    )
+
+    $cacheProperty = $Block.PSObject.Properties["DuimpLabelPositionMap"]
+    if ($null -eq $cacheProperty) {
+        $cache = @{}
+        $Block | Add-Member -MemberType NoteProperty -Name "DuimpLabelPositionMap" -Value $cache
+        $cacheProperty = $Block.PSObject.Properties["DuimpLabelPositionMap"]
+    }
+    $key = ConvertTo-NormalizedKey $Label
+    if (-not $cacheProperty.Value.ContainsKey($key)) {
+        $cacheProperty.Value[$key] = @(Get-BlockLabelPositions -Block $Block -Label $Label)
+    }
+    return @($cacheProperty.Value[$key])
+}
+
+function Initialize-DuimpBlockLayoutCache {
+    param([Parameter(Mandatory = $true)] [object[]] $Blocks)
+
+    if ($Blocks.Count -eq 0) {
+        return
+    }
+
+    # Relações aceitas já possuem blocos de tamanho uniforme. As posições de
+    # rótulos e colunas financeiras, portanto, são iguais em todos eles. A
+    # cópia do mapa elimina a varredura de 12 colunas x 18/19 linhas a cada
+    # item e conserva a regra de cálculo original.
+    $template = $Blocks[0]
+    $slotByKey = Get-DuimpFinancialSlotByKey -Block $template
+    $slotMap = $template.PSObject.Properties["DuimpFinancialSlotMap"].Value
+    $conditionSlot = Get-DuimpConditionSlot -Block $template
+    $observationPositions = @(Get-BlockLabelPositions -Block $template -Label "Observacoes")
+
+    foreach ($block in $Blocks) {
+        if ($null -eq $block.PSObject.Properties["DuimpFinancialSlotMap"]) {
+            $block | Add-Member -MemberType NoteProperty -Name "DuimpFinancialSlotMap" -Value $slotMap
+        }
+        if ($null -eq $block.PSObject.Properties["DuimpFinancialSlotByKey"]) {
+            $block | Add-Member -MemberType NoteProperty -Name "DuimpFinancialSlotByKey" -Value $slotByKey
+        }
+        if ($null -eq $block.PSObject.Properties["DuimpConditionSlot"]) {
+            $block | Add-Member -MemberType NoteProperty -Name "DuimpConditionSlot" -Value $conditionSlot
+        }
+        if ($null -eq $block.PSObject.Properties["DuimpLabelPositionMap"]) {
+            $block | Add-Member -MemberType NoteProperty -Name "DuimpLabelPositionMap" -Value @{ "observacoes" = $observationPositions }
+        }
+    }
 }
 
 function Get-DuimpBlockLayout {
@@ -579,9 +733,10 @@ function ConvertTo-ShipmentRecords {
     param([Parameter(Mandatory = $true)] [object[]] $Rows)
 
     $records = New-Object "System.Collections.Generic.List[object]"
+    $isConsolidatedDuimp = Test-ConsolidatedDuimpWorksheet -Rows $Rows
     $seen = @{}
     foreach ($block in @(Get-DocumentBlocks -Rows $Rows)) {
-        if ($seen.ContainsKey($block.Document)) {
+        if (-not $isConsolidatedDuimp -and $seen.ContainsKey($block.Document)) {
             throw "Documento duplicado encontrado: $($block.Document)"
         }
         $seen[$block.Document] = $true
@@ -593,9 +748,17 @@ function ConvertTo-ShipmentRecords {
             throw "Bloco incompleto para o documento $($block.Document)."
         }
 
-        $exchange = ConvertTo-DecimalValue $block.Rows[1][11]
-        if ($null -eq $exchange) {
-            $exchange = ConvertTo-DecimalValue $fob[3]
+        if ($isConsolidatedDuimp) {
+            $exchange = ConvertTo-ConsolidatedDuimpExchange $fob[3]
+            if ($null -eq $exchange) {
+                $exchange = ConvertTo-ConsolidatedDuimpExchange $block.Rows[1][11]
+            }
+        }
+        else {
+            $exchange = ConvertTo-DecimalValue $block.Rows[1][11]
+            if ($null -eq $exchange) {
+                $exchange = ConvertTo-DecimalValue $fob[3]
+            }
         }
         $displayedRate = ConvertTo-DecimalValue $fob[7]
         $fobBrl = ConvertTo-DecimalValue $fob[5]
@@ -644,11 +807,26 @@ function Merge-DuimpGroup {
     )
 
     $rows = Copy-Rows $Blocks[0].Rows
-    $observation = @(Get-BlockLabelPositions -Block $Blocks[0] -Label "Observacoes")
+    $observation = @(Get-CachedDuimpLabelPositions -Block $Blocks[0] -Label "Observacoes")
     if ($observation.Count -eq 0 -or $observation[0].Column + 1 -ge $rows[$observation[0].Row].Count) {
         throw "A linha de observações não foi encontrada para a DUIMP $Base."
     }
     $rows[$observation[0].Row][$observation[0].Column + 1] = $Base
+
+    # A maior parte das relações possui somente uma adição/item por DUIMP.
+    # Nesses casos, basta normalizar o documento sem recalcular campos que já
+    # representam o próprio total. O bloco continua independente do original.
+    if ($Blocks.Count -eq 1) {
+        return [pscustomobject]@{
+            StartIndex = $Blocks[0].StartIndex
+            Rows = $rows
+            Document = $Base
+            Type = "DUIMP"
+            Base = $Base
+            Addition = $null
+            Item = $null
+        }
+    }
 
     if ((@(Get-UniqueNonBlank -Blocks $Blocks -Row 5 -Column 1)).Count -gt 1) {
         $rows[5][1] = "DIVERSAS MERCADORIAS"
@@ -657,8 +835,10 @@ function Merge-DuimpGroup {
         $rows[5][7] = "DIVERSAS"
     }
     $conditionValues = New-Object "System.Collections.Generic.List[string]"
+    $conditionSlots = New-Object "System.Collections.Generic.List[object]"
     foreach ($block in $Blocks) {
         $condition = Get-DuimpConditionSlot -Block $block
+        $conditionSlots.Add($condition)
         if ($null -eq $condition) {
             continue
         }
@@ -668,23 +848,26 @@ function Merge-DuimpGroup {
         }
     }
     if (@($conditionValues | Select-Object -Unique).Count -gt 1) {
-        $targetCondition = Get-DuimpConditionSlot -Block $Blocks[0]
+        $targetCondition = $conditionSlots[0]
         if ($null -ne $targetCondition) {
             $rows[$targetCondition.Row][$targetCondition.Column] = "CONFORME ITENS"
         }
     }
 
+    $sourceSlotsByKey = New-Object "System.Collections.Generic.List[hashtable]"
+    foreach ($block in $Blocks) {
+        $sourceSlotsByKey.Add((Get-DuimpFinancialSlotByKey -Block $block))
+    }
     foreach ($label in @("FOB", "Frete", "Despesas", "Lucro Esp", "Imposto", "Seguro", "Total")) {
         $targetSlots = @(Get-DuimpFinancialSlots -Block $Blocks[0] -Label $label)
         foreach ($targetSlot in $targetSlots) {
             $values = New-Object "System.Collections.Generic.List[object]"
-            foreach ($block in $Blocks) {
-                $sourceSlot = @(Get-DuimpFinancialSlots -Block $block -Label $label |
-                    Where-Object { $_.Key -eq $targetSlot.Key })
-                if ($sourceSlot.Count -eq 0) {
+            for ($blockIndex = 0; $blockIndex -lt $Blocks.Count; $blockIndex++) {
+                $sourceSlot = $sourceSlotsByKey[$blockIndex][$targetSlot.Key]
+                if ($null -eq $sourceSlot) {
                     continue
                 }
-                $rawValue = $block.Rows[$sourceSlot[0].Row][$sourceSlot[0].Column]
+                $rawValue = $Blocks[$blockIndex].Rows[$sourceSlot.Row][$sourceSlot.Column]
                 if ($null -ne (ConvertTo-DecimalValue $rawValue)) {
                     $values.Add($rawValue)
                 }
@@ -1095,6 +1278,7 @@ Export-ModuleMember -Function @(
     "New-DocumentBlock",
     "Get-DocumentBlocks",
     "Get-DuimpBlockLayout",
+    "Initialize-DuimpBlockLayoutCache",
     "ConvertTo-ShipmentRecords",
     "Merge-DuimpDocumentBlocks",
     "Test-DuimpResultDocuments",

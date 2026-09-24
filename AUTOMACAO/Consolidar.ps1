@@ -1,4 +1,4 @@
-﻿[CmdletBinding()]
+[CmdletBinding()]
 param(
     [string] $RaizConsolidacoes,
     [switch] $SemInteracao
@@ -57,6 +57,31 @@ function Write-OperationalLog {
 
     $line = "{0} [{1}] {2}" -f (Get-Date).ToString("yyyy-MM-dd HH:mm:ss"), $Level, $Message
     Add-Content -LiteralPath $logPath -Value $line -Encoding UTF8
+}
+
+function Write-Phase {
+    param(
+        [Parameter(Mandatory = $true)] [datetime] $StartedAt,
+        [Parameter(Mandatory = $true)] [string] $Message
+    )
+
+    $elapsedSeconds = [int] [Math]::Floor(((Get-Date) - $StartedAt).TotalSeconds)
+    $minutes = [int] [Math]::Floor($elapsedSeconds / 60)
+    $seconds = $elapsedSeconds % 60
+    Write-Host ("[{0:D2}:{1:D2}] {2}" -f $minutes, $seconds, $Message) -ForegroundColor DarkCyan
+}
+
+function Get-ElapsedText {
+    param([Parameter(Mandatory = $true)] [datetime] $StartedAt)
+
+    return ("{0:N1}s" -f ((Get-Date) - $StartedAt).TotalSeconds)
+}
+
+function Set-ExcelManualCalculation {
+    param($Excel)
+
+    try { $Excel.Calculation = -4135 } catch {}
+    try { $Excel.CalculateBeforeSave = $false } catch {}
 }
 
 function Get-RelativePath {
@@ -554,9 +579,11 @@ function Apply-CtresShipmentBranding {
     $details.RowHeight = 19
     $Sheet.Range("A$FirstDataRow", "G$LastDataRow").HorizontalAlignment = -4131
     $Sheet.Range("H$FirstDataRow", "V$LastDataRow").HorizontalAlignment = -4152
-    for ($row = $FirstDataRow + 1; $row -le $LastDataRow; $row += 2) {
-        $Sheet.Range("A$row", "V$row").Interior.Color = $Branding.LightBlue
-    }
+    # Uma única regra condicional substitui chamadas COM por linha e mantém o
+    # zebrado para qualquer quantidade de documentos.
+    $details.FormatConditions.Delete()
+    $alternateRows = $details.FormatConditions.Add(2, $null, "=MOD(LIN()-$FirstDataRow;2)=1")
+    $alternateRows.Interior.Color = $Branding.LightBlue
 
     $total = $Sheet.Range("A$TotalRow", "V$TotalRow")
     $total.Interior.Color = $Branding.Navy
@@ -639,31 +666,31 @@ function Apply-CtresDuimpBranding {
         $Sheet.Range($address).Font.Color = $Branding.SecondaryBlue
     }
 
-    for ($index = 0; $index -lt $DocumentCount; $index++) {
-        $startRow = $HeaderRows + 1 + ($index * $BlockSize)
-        $blockEndRow = $startRow + $BlockSize - 1
-        $financialHeaderRow = $startRow + $BlockSize - 9
-        $totalRow = $startRow + $BlockSize - 2
+    # Os blocos têm tamanho fixo. Formatação condicional aplica as quatro
+    # faixas visuais em lote, evitando centenas de chamadas COM por arquivo.
+    $firstDocumentRow = $HeaderRows + 1
+    $documentRange = $Sheet.Range("A$firstDocumentRow", "L$FinalRows")
+    $documentRange.FormatConditions.Delete()
 
-        $blockHeader = $Sheet.Range("A$startRow", "L$startRow")
-        $blockHeader.Interior.Color = $Branding.SecondaryBlue
-        $blockHeader.Font.Name = $Branding.Font
-        $blockHeader.Font.Bold = $true
-        $blockHeader.Font.Color = $Branding.White
-        $blockHeader.HorizontalAlignment = -4108
-        $blockHeader.VerticalAlignment = -4108
-        $blockHeader.RowHeight = 18
+    $blockHeader = $documentRange.FormatConditions.Add(2, $null, "=MOD(LIN()-$firstDocumentRow;$BlockSize)=0")
+    $blockHeader.Interior.Color = $Branding.SecondaryBlue
+    $blockHeader.Font.Bold = $true
+    $blockHeader.Font.Color = $Branding.White
 
-        $Sheet.Range("A$($startRow + 1)", "L$($startRow + 1)").Interior.Color = $Branding.LightBlue
-        $Sheet.Range("A$financialHeaderRow", "L$financialHeaderRow").Interior.Color = $Branding.SoftGray
-        $Sheet.Range("A$financialHeaderRow", "L$financialHeaderRow").Font.Bold = $true
-        $Sheet.Range("A$financialHeaderRow", "L$financialHeaderRow").Font.Color = $Branding.Navy
-        $Sheet.Range("A$totalRow", "L$totalRow").Interior.Color = $Branding.LightBlue
-        $Sheet.Range("A$totalRow", "L$totalRow").Font.Bold = $true
-        $Sheet.Range("A$totalRow", "L$totalRow").Borders.Item(8).Color = $Branding.Orange
-        $Sheet.Range("A$totalRow", "L$totalRow").Borders.Item(8).Weight = 3
-        $Sheet.Rows.Item($blockEndRow).RowHeight = 6
-    }
+    $blockSecondRow = $documentRange.FormatConditions.Add(2, $null, "=MOD(LIN()-$firstDocumentRow;$BlockSize)=1")
+    $blockSecondRow.Interior.Color = $Branding.LightBlue
+
+    $financialHeader = $documentRange.FormatConditions.Add(2, $null, "=MOD(LIN()-$firstDocumentRow;$BlockSize)=$($BlockSize - 9)")
+    $financialHeader.Interior.Color = $Branding.SoftGray
+    $financialHeader.Font.Bold = $true
+    $financialHeader.Font.Color = $Branding.Navy
+
+    $blockTotal = $documentRange.FormatConditions.Add(2, $null, "=MOD(LIN()-$firstDocumentRow;$BlockSize)=$($BlockSize - 2)")
+    $blockTotal.Interior.Color = $Branding.LightBlue
+    $blockTotal.Font.Bold = $true
+
+    # As alturas já vêm do arquivo da seguradora. Mantê-las evita chamadas COM
+    # por bloco e conserva a separação visual original entre documentos.
 
     $Sheet.Tab.Color = $Branding.Navy
     Set-CtresPageLayout -Sheet $Sheet -PrintArea "`$A`$1:`$L`$$FinalRows"
@@ -775,7 +802,9 @@ function Add-ShipmentWorksheet {
         $Excel.ActiveWindow.FreezePanes = $true
         $Excel.ActiveWindow.DisplayGridlines = $false
 
-        [void] $Excel.CalculateFullRebuild()
+        # O cálculo manual evita recálculos globais a cada aba. Esta chamada
+        # calcula somente a aba criada antes da validação financeira abaixo.
+        [void] $Sheet.Calculate()
         $used = $Sheet.Range("A1", "V$totalRow")
         Assert-NoFormulaErrors $used
 
@@ -817,6 +846,7 @@ function Write-ShipmentBatchWorkbook {
             throw "O lote de embarques não contém relações válidas."
         }
         $workbook = $Excel.Workbooks.Add()
+        Set-ExcelManualCalculation -Excel $Excel
         while ($workbook.Worksheets.Count -gt 1) {
             [void] $workbook.Worksheets.Item($workbook.Worksheets.Count).Delete()
         }
@@ -881,6 +911,7 @@ function Write-DuimpWorkbook {
         [string] $TemporaryPath
     )
 
+    $consolidationStartedAt = Get-Date
     $sourceBlocks = @(Get-DocumentBlocks -Rows $Rows)
     $layout = Get-DuimpBlockLayout -Blocks $sourceBlocks
     $blockSize = [int] $layout.BlockSize
@@ -889,6 +920,8 @@ function Write-DuimpWorkbook {
         $fixedBlocks.Add((New-DocumentBlock -Rows @($block.Rows[0..($blockSize - 1)]) -StartIndex $block.StartIndex))
     }
     $sourceBlocks = $fixedBlocks.ToArray()
+    Initialize-DuimpBlockLayoutCache -Blocks $sourceBlocks
+    Write-Phase -StartedAt $runStartedAt -Message "Blocos DUIMP identificados: $($sourceBlocks.Count); agrupando valores..."
 
     $headerRows = [int] $layout.HeaderRows
 
@@ -902,17 +935,14 @@ function Write-DuimpWorkbook {
     if ($firstDuimpIndex -lt 0) {
         throw "Nenhuma DUIMP fracionada foi encontrada."
     }
-    for ($index = $firstDuimpIndex + 1; $index -lt $sourceBlocks.Count; $index++) {
-        if ($sourceBlocks[$index].Type -ne "DUIMP") {
-            throw "Existem DIs após o início das DUIMPs; a relação foi rejeitada para preservar o formato."
-        }
-    }
 
     $consolidated = @(Merge-DuimpDocumentBlocks -Blocks $sourceBlocks)
+    Initialize-DuimpBlockLayoutCache -Blocks $consolidated
     $differences = @(Compare-DuimpFinancialTotals -OriginalBlocks $sourceBlocks -ConsolidatedBlocks $consolidated)
     if ($differences.Count -gt 0) {
         throw "A consolidação de DUIMP apresentou divergências financeiras."
     }
+    Write-Phase -StartedAt $runStartedAt -Message "Consolidação financeira validada em $(Get-ElapsedText $consolidationStartedAt); montando workbook..."
 
     Copy-Item -LiteralPath $SourcePath -Destination $TemporaryPath
     [void] (Remove-XlsxSheetProtection -Path $TemporaryPath)
@@ -925,6 +955,7 @@ function Write-DuimpWorkbook {
     try {
         $branding = Get-CtresBranding
         $workbook = $Excel.Workbooks.Open($TemporaryPath, 0, $false)
+        Set-ExcelManualCalculation -Excel $Excel
         $sheet = $workbook.Worksheets.Item(1)
 
         $remainingBlocks = @($consolidated[$firstDuimpIndex..($consolidated.Count - 1)])
@@ -1033,7 +1064,9 @@ function Get-InputFiles {
 
 $lockStream = $null
 $excel = $null
+$excelSettings = $null
 $temporaryRoot = Join-Path ([IO.Path]::GetTempPath()) "CtresConsolidacoes"
+$runStartedAt = Get-Date
 $completed = 0
 $completedShipmentBatches = 0
 $completedShipmentFiles = 0
@@ -1182,12 +1215,29 @@ try {
         Write-Host "Nenhuma demanda nova para processar." -ForegroundColor Green
     }
     else {
+        Write-Phase -StartedAt $runStartedAt -Message "Preparando Excel para a fila..."
         $excel = New-Object -ComObject Excel.Application
+        $excelSettings = [pscustomobject]@{
+            ScreenUpdating = $excel.ScreenUpdating
+            EnableEvents = $excel.EnableEvents
+            DisplayAlerts = $excel.DisplayAlerts
+            AskToUpdateLinks = $excel.AskToUpdateLinks
+            Calculation = $excel.Calculation
+            CalculateBeforeSave = $excel.CalculateBeforeSave
+        }
         $excel.Visible = $false
         $excel.DisplayAlerts = $false
         $excel.AskToUpdateLinks = $false
         $excel.AutomationSecurity = 3
         $excel.ScreenUpdating = $false
+        $excel.EnableEvents = $false
+        # Algumas instalações corporativas só permitem alterar o modo de
+        # cálculo depois que há um workbook aberto. Não interromper a fila
+        # nesses casos; os geradores também tentam aplicar o modo manual.
+        try { $excel.Calculation = -4135 } catch {
+            Write-OperationalLog "AVISO" "O Excel não aceitou o cálculo manual antes da abertura do workbook."
+        }
+        try { $excel.CalculateBeforeSave = $false } catch {}
 
         $shipmentJobs = @($pendingJobs | Where-Object { $_.Process.Type -eq "EMBARQUES" })
         $duimpJobs = @($pendingJobs | Where-Object { $_.Process.Type -eq "DUIMP" })
@@ -1206,12 +1256,15 @@ try {
         foreach ($job in $shipmentJobs) {
             $metadata = $null
             try {
+                $readStartedAt = Get-Date
+                Write-Phase -StartedAt $runStartedAt -Message "Lendo relação de Embarques: $($job.InputFile.Name)"
                 Test-FileReady $job.InputFile
                 $currentHash = (Get-FileHash -LiteralPath $job.InputFile.FullName -Algorithm SHA256).Hash
                 if ($currentHash -ne $job.Hash) {
                     throw "O arquivo foi alterado após a pré-análise. Execute novamente para processar a versão atual."
                 }
                 $source = Read-SourceData -Excel $excel -Path $job.InputFile.FullName
+                Write-Phase -StartedAt $runStartedAt -Message "Relação lida em $(Get-ElapsedText $readStartedAt); validando estrutura..."
                 $metadata = Get-WorkbookMetadata -Rows $source.Rows
                 $key = Get-ShipmentBatchKey -Metadata $metadata
                 $records = @(ConvertTo-ShipmentRecords -Rows $source.Rows)
@@ -1305,7 +1358,10 @@ try {
                     $jobDirectory = Join-Path $temporaryRoot ([guid]::NewGuid().ToString("N"))
                     New-Item -ItemType Directory -Path $jobDirectory -Force | Out-Null
                     $temporaryPath = Join-Path $jobDirectory "resultado.xlsx"
+                    $generationStartedAt = Get-Date
+                    Write-Phase -StartedAt $runStartedAt -Message "Gerando e formatando lote de Embarques $batchPosition/$($groupKeys.Count)..."
                     $result = Write-ShipmentBatchWorkbook -Excel $excel -Items $items -TemporaryPath $temporaryPath
+                    Write-Phase -StartedAt $runStartedAt -Message "Lote pronto em $(Get-ElapsedText $generationStartedAt); publicando..."
                     if (-not (Test-Path -LiteralPath $temporaryPath -PathType Leaf)) {
                         throw "O workbook unificado temporário não foi criado."
                     }
@@ -1333,7 +1389,7 @@ try {
                     $stateArray = $stateItems.ToArray()
                     $commitState = {
                         Add-StateEntriesBatch -Entries $stateArray -BatchId $batchId -BatchSize $batchSize
-                    }.GetNewClosure()
+                    }
                     Publish-ConsolidationBatchFiles `
                         -Sources $publishSources.ToArray() `
                         -TemporaryResultPath $temporaryPath `
@@ -1346,7 +1402,7 @@ try {
                     $completedShipmentFiles += $items.Count
                     $completedShipmentSheets += $result.Sheets
                     Write-Host "[LOTE CONCLUÍDO $batchPosition/$($groupKeys.Count)] $([IO.Path]::GetFileName($outputPath)) | $($items.Count) arquivo(s), $($result.Sheets) aba(s), $($result.Documents) documento(s)." -ForegroundColor Green
-                    Write-OperationalLog "LOTE CONCLUÍDO" "$key | $($items.Count) arquivo(s) | $($result.Sheets) aba(s) | $([IO.Path]::GetFileName($outputPath))."
+                    Write-OperationalLog "LOTE CONCLUÍDO" "$key | $($items.Count) arquivo(s) | $($result.Sheets) aba(s) | $([IO.Path]::GetFileName($outputPath)) | $(Get-ElapsedText $generationStartedAt)."
                 }
                 catch {
                     $rejected += $items.Count
@@ -1383,6 +1439,8 @@ try {
             $jobDirectory = $null
             Write-Host "[PROCESSANDO DUIMP $jobPosition/$($duimpJobs.Count)] $($inputFile.Name)..." -ForegroundColor Cyan
             try {
+                $readStartedAt = Get-Date
+                Write-Phase -StartedAt $runStartedAt -Message "Lendo relação de DUIMP $jobPosition/$($duimpJobs.Count)..."
                 Test-FileReady $inputFile
                 $currentHash = (Get-FileHash -LiteralPath $inputFile.FullName -Algorithm SHA256).Hash
                 if ($currentHash -ne $hash) {
@@ -1390,13 +1448,17 @@ try {
                 }
 
                 $source = Read-SourceData -Excel $excel -Path $inputFile.FullName
+                Write-Phase -StartedAt $runStartedAt -Message "Relação lida em $(Get-ElapsedText $readStartedAt); consolidando blocos..."
                 $metadata = Get-WorkbookMetadata -Rows $source.Rows
                 $fileName = Get-OutputFileName -Client $metadata.Client -Reference $metadata.Reference -ProcessType "DUIMP"
                 $outputPath = Get-NextOutputPath -OutputDirectory $process.Output -FileName $fileName
                 $jobDirectory = Join-Path $temporaryRoot ([guid]::NewGuid().ToString("N"))
                 New-Item -ItemType Directory -Path $jobDirectory -Force | Out-Null
                 $temporaryPath = Join-Path $jobDirectory "resultado.xlsx"
+                $generationStartedAt = Get-Date
+                Write-Phase -StartedAt $runStartedAt -Message "Gerando, formatando e validando DUIMP..."
                 $result = Write-DuimpWorkbook -Excel $excel -Metadata $metadata -SourcePath $inputFile.FullName -Rows $source.Rows -OriginalUsedRows $source.UsedRows -TemporaryPath $temporaryPath
+                Write-Phase -StartedAt $runStartedAt -Message "DUIMP pronta em $(Get-ElapsedText $generationStartedAt); publicando..."
                 $detail = "$($result.FinalBlocks) documentos finais"
                 if ($result.RepeatedOccurrences -gt 0) {
                     $detail += "; $($result.RepeatedOccurrences) ocorrência(s) repetida(s)"
@@ -1416,7 +1478,7 @@ try {
                         -InputName $inputName `
                         -OutputPath $outputPath `
                         -ArchivedPath $archivePath
-                }.GetNewClosure()
+                }
                 Publish-ConsolidationFiles `
                     -SourcePath $inputFile.FullName `
                     -TemporaryResultPath $temporaryPath `
@@ -1428,7 +1490,7 @@ try {
                 $completed++
                 $completedDuimpFiles++
                 Write-Host "[DUIMP CONCLUÍDA $jobPosition/$($duimpJobs.Count)] $($inputFile.Name) -> $([IO.Path]::GetFileName($outputPath)) ($detail)" -ForegroundColor Green
-                Write-OperationalLog "DUIMP CONCLUÍDA" "$($inputFile.Name) | $([IO.Path]::GetFileName($outputPath)) | $detail."
+                Write-OperationalLog "DUIMP CONCLUÍDA" "$($inputFile.Name) | $([IO.Path]::GetFileName($outputPath)) | $detail | $(Get-ElapsedText $generationStartedAt)."
             }
             catch {
                 $rejected++
@@ -1452,6 +1514,14 @@ catch {
 }
 finally {
     if ($null -ne $excel) {
+        if ($null -ne $excelSettings) {
+            try { $excel.ScreenUpdating = $excelSettings.ScreenUpdating } catch {}
+            try { $excel.EnableEvents = $excelSettings.EnableEvents } catch {}
+            try { $excel.DisplayAlerts = $excelSettings.DisplayAlerts } catch {}
+            try { $excel.AskToUpdateLinks = $excelSettings.AskToUpdateLinks } catch {}
+            try { $excel.Calculation = $excelSettings.Calculation } catch {}
+            try { $excel.CalculateBeforeSave = $excelSettings.CalculateBeforeSave } catch {}
+        }
         try { [void] $excel.Quit() } catch {}
         Release-ComObject $excel
     }
@@ -1471,6 +1541,7 @@ Write-Host "  Arquivos de DUIMP concluídos: $completedDuimpFiles"
 Write-Host "  Já processados arquivados: $archivedPrevious"
 Write-Host "  Lotes de Embarques rejeitados: $rejectedShipmentBatches"
 Write-Host "  Arquivos rejeitados: $rejected"
+Write-Host "  Tempo total: $(Get-ElapsedText $runStartedAt)"
 foreach ($warning in $brandingWarnings) {
     Write-Host "  AVISO: $warning" -ForegroundColor Yellow
     Write-OperationalLog "AVISO" $warning
